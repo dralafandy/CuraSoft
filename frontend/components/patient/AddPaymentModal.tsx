@@ -1,24 +1,32 @@
 import React, { useState } from 'react';
 import { Payment } from '../../types';
+import { ClinicData } from '../../hooks/useClinicData';
 import { useI18n } from '../../hooks/useI18n';
+import { useNotification } from '../../contexts/NotificationContext';
+import { NotificationType } from '../../types';
 import { PaymentMethod } from '../../types';
 
 const CloseIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>;
 
 interface AddPaymentModalProps {
     patientId: string;
+    clinicData: ClinicData;
     onClose: () => void;
     onAdd: (payment: Omit<Payment, 'id'>) => void;
 }
 
-const AddPaymentModal: React.FC<AddPaymentModalProps> = ({ patientId, onClose, onAdd }) => {
+const AddPaymentModal: React.FC<AddPaymentModalProps> = ({ patientId, clinicData, onClose, onAdd }) => {
     const { t } = useI18n();
+    const { addNotification } = useNotification();
     const [formData, setFormData] = useState<Omit<Payment, 'id'>>({
         patientId,
         date: new Date().toISOString().split('T')[0],
         amount: 0,
         method: 'Cash',
         notes: '',
+        treatmentRecordId: '',
+        clinicShare: 0,
+        doctorShare: 0,
     });
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -29,9 +37,26 @@ const AddPaymentModal: React.FC<AddPaymentModalProps> = ({ patientId, onClose, o
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (formData.amount <= 0) {
-            alert(t('addPaymentModal.alertPositiveAmount')); // Placeholder for a new translation key
+            addNotification(t('addPaymentModal.alertPositiveAmount'), NotificationType.ERROR);
             return;
         }
+        if (!formData.treatmentRecordId) {
+            addNotification('Please select a treatment record', NotificationType.ERROR);
+            return;
+        }
+
+        // Calculate shares based on the selected treatment record
+        const treatmentRecord = clinicData.treatmentRecords.find(tr => tr.id === formData.treatmentRecordId);
+        if (treatmentRecord) {
+            const treatmentDef = clinicData.treatmentDefinitions.find(td => td.id === treatmentRecord.treatmentDefinitionId);
+            if (treatmentDef) {
+                const doctorShare = formData.amount * treatmentDef.doctorPercentage;
+                const clinicShare = formData.amount - doctorShare;
+                formData.clinicShare = clinicShare;
+                formData.doctorShare = doctorShare;
+            }
+        }
+
         onAdd(formData);
         onClose();
     };
@@ -56,6 +81,20 @@ const AddPaymentModal: React.FC<AddPaymentModalProps> = ({ patientId, onClose, o
                     <div>
                         <label htmlFor="amount" className="block text-sm font-medium text-slate-600 mb-1">{t('addPaymentModal.amount')}</label>
                         <input id="amount" name="amount" type="number" step="0.01" value={formData.amount} onChange={handleChange} className="p-2 border border-slate-300 rounded-lg w-full focus:ring-primary focus:border-primary" required min="0.01" />
+                    </div>
+                    <div>
+                        <label htmlFor="treatmentRecord" className="block text-sm font-medium text-slate-600 mb-1">Treatment Record</label>
+                        <select id="treatmentRecord" name="treatmentRecordId" value={formData.treatmentRecordId} onChange={handleChange} className="p-2 border border-slate-300 rounded-lg w-full focus:ring-primary focus:border-primary" required>
+                            <option value="">Select a treatment record</option>
+                            {clinicData.treatmentRecords.filter(tr => tr.patientId === patientId).map(tr => {
+                                const treatmentDef = clinicData.treatmentDefinitions.find(td => td.id === tr.treatmentDefinitionId);
+                                return (
+                                    <option key={tr.id} value={tr.id}>
+                                        {treatmentDef?.name || 'Unknown Treatment'} - {new Date(tr.treatmentDate).toLocaleDateString()}
+                                    </option>
+                                );
+                            })}
+                        </select>
                     </div>
                     <div>
                         <label htmlFor="paymentMethod" className="block text-sm font-medium text-slate-600 mb-1">{t('addPaymentModal.paymentMethod')}</label>

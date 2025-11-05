@@ -1,7 +1,39 @@
 import React, { useMemo } from 'react';
 import { ClinicData } from '../../hooks/useClinicData';
 import { useI18n } from '../../hooks/useI18n';
-import { Patient, AppointmentStatus, ExpenseCategory, TreatmentRecord, Expense, Appointment, InventoryItem } from '../../types';
+import { Patient, AppointmentStatus, ExpenseCategory, TreatmentRecord, Expense, Appointment, InventoryItem, LabCase, Payment, SupplierInvoice } from '../../types';
+
+const PrintStyles = () => (
+  <style>{`
+    @media print {
+      @page {
+        size: A4;
+        margin: 1cm;
+      }
+      body {
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .print-header {
+        margin-bottom: 1.5rem;
+        page-break-after: avoid;
+      }
+      .print-section {
+        margin-bottom: 1rem;
+        page-break-inside: avoid;
+      }
+      table {
+        font-size: 10px;
+      }
+      h1 {
+        font-size: 18px;
+      }
+      h2, h3, h4 {
+        font-size: 14px;
+      }
+    }
+  `}</style>
+);
 
 const PrintTable: React.FC<{title: string, headers: string[], data: (string|number)[][]}> = ({ title, headers, data }) => (
     <div className="mb-6 break-inside-avoid">
@@ -25,14 +57,14 @@ const PrintTable: React.FC<{title: string, headers: string[], data: (string|numb
 
 interface PrintableReportProps {
     clinicData: ClinicData;
-    activeTab: 'patientStats' | 'financialSummary' | 'appointmentOverview' | 'inventoryReport' | 'treatmentPerformance';
+    activeTab: 'patientStats' | 'financialSummary' | 'appointmentOverview' | 'inventoryReport' | 'treatmentPerformance' | 'labCasesReport' | 'paymentsReport' | 'supplierInvoicesReport' | 'dentistsReport' | 'suppliersReport' | 'dailyFinancialSummary' | 'monthlyFinancialSummary' | 'quarterlyAnnualOverview';
     startDate: string;
     endDate: string;
 }
 
 const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab, startDate, endDate }) => {
     const { t, locale } = useI18n();
-    const { patients, appointments, expenses, inventoryItems, treatmentDefinitions, dentists, treatmentRecords } = clinicData;
+    const { patients, appointments, expenses, inventoryItems, treatmentDefinitions, dentists, treatmentRecords, labCases, payments, supplierInvoices, suppliers, clinicInfo } = clinicData;
 
     const currencyFormatter = new Intl.NumberFormat(locale, { style: 'currency', currency: 'EGP' });
     const dateFormatter = new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -106,7 +138,8 @@ const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab
 
         const totalIncome = filteredTreatmentRecords.reduce((sum, rec) => sum + rec.totalTreatmentCost, 0);
         const totalExpenses = filteredExpenses.reduce((sum, exp) => sum + exp.amount, 0);
-        const netProfit = totalIncome - totalExpenses;
+        const totalDoctorPayments = clinicData.doctorPayments.reduce((sum, payment) => sum + payment.amount, 0);
+        const netProfit = totalIncome - (totalExpenses + totalDoctorPayments);
 
         const incomeByTreatment: Record<string, number> = {};
         filteredTreatmentRecords.forEach(rec => {
@@ -189,12 +222,36 @@ const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab
             totalRevenue: stats.totalRevenue,
             totalClinicShare: stats.totalClinicShare,
             totalDoctorShare: stats.totalDoctorShare,
-        })).sort((a,b) => b.totalRevenue - a.totalRevenue); 
+        })).sort((a,b) => b.totalRevenue - a.totalRevenue);
 
         return {
             allTreatmentPerformance: formattedStats,
         };
     }, [treatmentRecords, treatmentDefinitions, startDate, endDate, t]);
+
+    const labCasesReport = useMemo(() => {
+        const filteredLabCases: LabCase[] = filterDataByDate(labCases, 'sentDate');
+
+        return {
+            filteredLabCases,
+        };
+    }, [labCases, startDate, endDate]);
+
+    const paymentsReport = useMemo(() => {
+        const filteredPayments: Payment[] = filterDataByDate(payments, 'date');
+
+        return {
+            filteredPayments,
+        };
+    }, [payments, startDate, endDate]);
+
+    const supplierInvoicesReport = useMemo(() => {
+        const filteredSupplierInvoices: SupplierInvoice[] = filterDataByDate(supplierInvoices, 'invoiceDate');
+
+        return {
+            filteredSupplierInvoices,
+        };
+    }, [supplierInvoices, startDate, endDate]);
     
     const tabTitles: Record<typeof activeTab, string> = {
         patientStats: t('reports.tabPatientStatistics'),
@@ -202,17 +259,37 @@ const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab
         appointmentOverview: t('reports.tabAppointmentOverview'),
         inventoryReport: t('reports.tabInventoryReport'),
         treatmentPerformance: t('reports.tabTreatmentPerformance'),
+        labCasesReport: t('reports.tabLabCasesReport'),
+        paymentsReport: t('reports.tabPaymentsReport'),
+        supplierInvoicesReport: t('reports.tabSupplierInvoicesReport'),
+        dentistsReport: t('reports.tabDentistsReport'),
+        suppliersReport: t('reports.tabSuppliersReport'),
+        dailyFinancialSummary: t('reports.dailyFinancialSummary.title'),
+        monthlyFinancialSummary: t('reports.monthlyFinancialSummary.title'),
+        quarterlyAnnualOverview: t('reports.quarterlyAnnualOverview.title'),
     };
 
     return (
-        <div className="p-4 bg-white text-slate-900" dir="rtl">
-            <header className="text-center mb-6">
-                <h1 className="text-2xl font-bold text-slate-800 mb-2">{t('appName')} - {tabTitles[activeTab]}</h1>
-                <p className="text-md text-slate-600">{t('reports.dateRange')}: {startDate ? dateFormatter.format(new Date(startDate)) : t('common.na')} - {endDate ? dateFormatter.format(new Date(endDate)) : t('common.na')}</p>
-            </header>
+        <>
+            <PrintStyles />
+            <div className="p-4 bg-white text-slate-900" dir="rtl">
+                <header className="print-header text-center mb-6">
+                    <div className="mb-4">
+                        <h1 className="text-2xl font-bold text-slate-800 mb-1">{clinicInfo.name || t('appName')}</h1>
+                        <div className="text-sm text-slate-600 space-y-1">
+                            {clinicInfo.address && <p>{clinicInfo.address}</p>}
+                            <div className="flex justify-center gap-4">
+                                {clinicInfo.phone && <span>{t('common.phone')}: {clinicInfo.phone}</span>}
+                                {clinicInfo.email && <span>{t('common.email')}: {clinicInfo.email}</span>}
+                            </div>
+                        </div>
+                    </div>
+                    <h2 className="text-xl font-semibold text-slate-700 mb-2">{tabTitles[activeTab]}</h2>
+                    <p className="text-md text-slate-600">{t('reports.dateRange')}: {startDate ? dateFormatter.format(new Date(startDate)) : t('common.na')} - {endDate ? dateFormatter.format(new Date(endDate)) : t('common.na')}</p>
+                </header>
             <main>
                 {activeTab === 'patientStats' && (
-                    <div className="space-y-6">
+                    <div className="print-section space-y-6">
                          <PrintTable
                             title={t('reports.patientStats.genderDistribution')}
                             headers={[t('patientDetails.gender'), t('reports.treatmentPerformance.count')]}
@@ -226,7 +303,7 @@ const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab
                     </div>
                 )}
                 {activeTab === 'financialSummary' && (
-                    <div className="space-y-6">
+                    <div className="print-section space-y-6">
                          <PrintTable
                             title={t('reports.financialSummary.incomeByTreatment')}
                             headers={[t('reports.treatmentPerformance.treatment'), t('reports.financialSummary.totalIncome')]}
@@ -240,7 +317,7 @@ const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab
                     </div>
                 )}
                 {activeTab === 'appointmentOverview' && (
-                     <div className="space-y-6">
+                     <div className="print-section space-y-6">
                         <PrintTable
                             title={t('reports.appointmentOverview.appointmentsByDentist')}
                             headers={[t('addAppointmentModal.dentist'), t('reports.appointmentOverview.totalAppointments')]}
@@ -249,7 +326,7 @@ const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab
                     </div>
                 )}
                 {activeTab === 'inventoryReport' && (
-                    <div className="space-y-6">
+                    <div className="print-section space-y-6">
                          <table className="min-w-full text-sm text-slate-700 border-collapse border border-slate-300">
                             <caption className="text-md font-bold text-slate-800 mb-2 text-start p-2 bg-slate-100">{t('reports.inventoryReport.allInventoryItems')}</caption>
                             <thead className="bg-slate-100">
@@ -272,7 +349,7 @@ const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab
                     </div>
                 )}
                  {activeTab === 'treatmentPerformance' && (
-                    <div>
+                    <div className="print-section">
                          <table className="min-w-full text-sm text-slate-700 border-collapse border border-slate-300">
                              <caption className="text-md font-bold text-slate-800 mb-2 text-start p-2 bg-slate-100">{t('reports.treatmentPerformance.allTreatmentPerformance')}</caption>
                             <thead className="bg-slate-100">
@@ -300,8 +377,377 @@ const PrintableReport: React.FC<PrintableReportProps> = ({ clinicData, activeTab
                         </table>
                     </div>
                 )}
+                {activeTab === 'labCasesReport' && (
+                    <div className="print-section">
+                        <table className="min-w-full text-sm text-slate-700 border-collapse border border-slate-300">
+                            <caption className="text-md font-bold text-slate-800 mb-2 text-start p-2 bg-slate-100">{t('reports.labCasesReport.allLabCases')}</caption>
+                            <thead className="bg-slate-100">
+                                <tr className="border-b border-slate-200">
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('labCase.patientName')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('labCase.caseType')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('labCase.status')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('labCase.cost')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('labCase.dueDate')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {labCasesReport.filteredLabCases.map(lc => (
+                                    <tr key={lc.id} className="border-b border-slate-200 last:border-b-0">
+                                        <td className="p-2 border border-slate-300">{patients.find(p => p.id === lc.patientId)?.name || t('common.unknownPatient')}</td>
+                                        <td className="p-2 border border-slate-300">{lc.caseType}</td>
+                                        <td className="p-2 border border-slate-300">{t(`labCaseStatus.${lc.status}`)}</td>
+                                        <td className="p-2 border border-slate-300">{currencyFormatter.format(lc.labCost)}</td>
+                                        <td className="p-2 border border-slate-300">{dateFormatter.format(new Date(lc.dueDate))}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+                {activeTab === 'paymentsReport' && (
+                    <div className="print-section">
+                        <table className="min-w-full text-sm text-slate-700 border-collapse border border-slate-300">
+                            <caption className="text-md font-bold text-slate-800 mb-2 text-start p-2 bg-slate-100">{t('reports.paymentsReport.allPayments')}</caption>
+                            <thead className="bg-slate-100">
+                                <tr className="border-b border-slate-200">
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('payment.patientName')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('payment.amount')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('payment.method')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('payment.date')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('payment.notes')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {payments.map(pay => (
+                                    <tr key={pay.id} className="border-b border-slate-200 last:border-b-0">
+                                        <td className="p-2 border border-slate-300">{patients.find(p => p.id === pay.patientId)?.name || t('common.unknownPatient')}</td>
+                                        <td className="p-2 border border-slate-300">{currencyFormatter.format(pay.amount)}</td>
+                                        <td className="p-2 border border-slate-300">{t(`paymentMethod.${pay.method}`)}</td>
+                                        <td className="p-2 border border-slate-300">{dateFormatter.format(new Date(pay.date))}</td>
+                                        <td className="p-2 border border-slate-300">{pay.notes || '-'}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+                {activeTab === 'supplierInvoicesReport' && (
+                    <div className="print-section">
+                        <table className="min-w-full text-sm text-slate-700 border-collapse border border-slate-300">
+                            <caption className="text-md font-bold text-slate-800 mb-2 text-start p-2 bg-slate-100">{t('reports.supplierInvoicesReport.allSupplierInvoices')}</caption>
+                            <thead className="bg-slate-100">
+                                <tr className="border-b border-slate-200">
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplierInvoice.supplierName')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplierInvoice.invoiceNumber')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplierInvoice.totalAmount')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplierInvoice.date')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplierInvoice.status')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {supplierInvoicesReport.filteredSupplierInvoices.map(si => (
+                                    <tr key={si.id} className="border-b border-slate-200 last:border-b-0">
+                                        <td className="p-2 border border-slate-300">{suppliers.find(s => s.id === si.supplierId)?.name || t('common.unknownSupplier')}</td>
+                                        <td className="p-2 border border-slate-300">{si.invoiceNumber}</td>
+                                        <td className="p-2 border border-slate-300">{currencyFormatter.format(si.amount)}</td>
+                                        <td className="p-2 border border-slate-300">{dateFormatter.format(new Date(si.invoiceDate))}</td>
+                                        <td className="p-2 border border-slate-300">{t(`supplierInvoiceStatus.${si.status}`)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+                {activeTab === 'dentistsReport' && (
+                    <div className="print-section">
+                        <table className="min-w-full text-sm text-slate-700 border-collapse border border-slate-300">
+                            <caption className="text-md font-bold text-slate-800 mb-2 text-start p-2 bg-slate-100">{t('reports.dentistsReport.allDentists')}</caption>
+                            <thead className="bg-slate-100">
+                                <tr className="border-b border-slate-200">
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('dentist.name')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('dentist.specialty')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {dentists.map(d => (
+                                    <tr key={d.id} className="border-b border-slate-200 last:border-b-0">
+                                        <td className="p-2 border border-slate-300">{d.name}</td>
+                                        <td className="p-2 border border-slate-300">{d.specialty}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+                {activeTab === 'suppliersReport' && (
+                    <div className="print-section">
+                        <table className="min-w-full text-sm text-slate-700 border-collapse border border-slate-300">
+                            <caption className="text-md font-bold text-slate-800 mb-2 text-start p-2 bg-slate-100">{t('reports.suppliersReport.allSuppliers')}</caption>
+                            <thead className="bg-slate-100">
+                                <tr className="border-b border-slate-200">
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplier.name')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplier.contactPerson')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplier.phone')}</th>
+                                    <th className="p-2 text-right font-semibold border border-slate-300">{t('supplier.email')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {suppliers.map(s => (
+                                    <tr key={s.id} className="border-b border-slate-200 last:border-b-0">
+                                        <td className="p-2 border border-slate-300">{s.name}</td>
+                                        <td className="p-2 border border-slate-300">{s.contactPerson}</td>
+                                        <td className="p-2 border border-slate-300">{s.phone}</td>
+                                        <td className="p-2 border border-slate-300">{s.email}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {activeTab === 'dailyFinancialSummary' && (
+                    <div className="print-section space-y-6">
+                        <h3 className="text-xl font-bold text-slate-800">{t('reports.dailyFinancialSummary.title')} - {new Date(startDate).toLocaleDateString(locale)}</h3>
+
+                        <PrintTable
+                            title={t('reports.dailyFinancialSummary.kpiCards')}
+                            headers={[t('common.metric'), t('common.value')]}
+                            data={[
+                                [t('reports.dailyFinancialSummary.todaysRevenue'), currencyFormatter.format(
+                                    payments.filter(p => p.date === startDate).reduce((sum, p) => sum + p.amount, 0)
+                                )],
+                                [t('dashboard.totalEarnings'), currencyFormatter.format(
+                                    payments.filter(p => p.date === startDate).reduce((sum, p) => sum + p.doctorShare, 0)
+                                )],
+                                [t('reports.dailyFinancialSummary.todaysExpenses'), currencyFormatter.format(
+                                    expenses.filter(e => e.date === startDate).reduce((sum, e) => sum + e.amount, 0)
+                                )],
+                                [t('reports.dailyFinancialSummary.todaysProfit'), currencyFormatter.format(
+                                    payments.filter(p => p.date === startDate).reduce((sum, p) => sum + p.amount, 0) -
+                                    expenses.filter(e => e.date === startDate).reduce((sum, e) => sum + e.amount, 0) -
+                                    payments.filter(p => p.date === startDate).reduce((sum, p) => sum + p.doctorShare, 0)
+                                )],
+                                [t('reports.dailyFinancialSummary.pendingPayments'), currencyFormatter.format(
+                                    treatmentRecords.filter(tr => new Date(tr.treatmentDate) <= new Date(startDate))
+                                        .reduce((sum, tr) => sum + tr.totalTreatmentCost, 0) -
+                                    payments.filter(p => new Date(p.date) <= new Date(startDate))
+                                        .reduce((sum, p) => sum + p.amount, 0)
+                                )],
+                                [t('reports.dailyFinancialSummary.overdueInvoices'), currencyFormatter.format(
+                                    treatmentRecords.filter(tr => {
+                                        const treatmentDate = new Date(tr.treatmentDate);
+                                        const daysSinceTreatment = (new Date(startDate).getTime() - treatmentDate.getTime()) / (1000 * 60 * 60 * 24);
+                                        return daysSinceTreatment > 30 && tr.totalTreatmentCost > payments
+                                            .filter(p => p.patientId === tr.patientId)
+                                            .reduce((sum, p) => sum + p.amount, 0);
+                                    }).reduce((sum, tr) => sum + tr.totalTreatmentCost, 0)
+                                )]
+                            ]}
+                        />
+
+                        <PrintTable
+                            title={t('reports.dailyFinancialSummary.todaysPayments')}
+                            headers={[t('common.patient'), t('payment.amount'), t('payment.method')]}
+                            data={payments.filter(p => p.date === startDate).map(payment => {
+                                const patient = patients.find(p => p.id === payment.patientId);
+                                return [patient?.name || t('common.unknown'), currencyFormatter.format(payment.amount), payment.method];
+                            })}
+                        />
+
+                        <PrintTable
+                            title={t('reports.dailyFinancialSummary.todaysExpenses')}
+                            headers={[t('expense.description'), t('expense.amount'), t('expense.category')]}
+                            data={expenses.filter(e => e.date === startDate).map(expense => [
+                                expense.description,
+                                currencyFormatter.format(expense.amount),
+                                t(`expenseCategory.${expense.category}`)
+                            ])}
+                        />
+                    </div>
+                )}
+
+                {activeTab === 'monthlyFinancialSummary' && (
+                    <div className="print-section space-y-6">
+                        <h3 className="text-xl font-bold text-slate-800">{t('reports.monthlyFinancialSummary.title')} - {new Date(startDate).toLocaleDateString(locale, { month: 'long', year: 'numeric' })}</h3>
+
+                        <PrintTable
+                            title={t('reports.monthlyFinancialSummary.kpiCards')}
+                            headers={[t('common.metric'), t('common.value')]}
+                            data={[
+                                [t('reports.monthlyFinancialSummary.thisMonthRevenue'), currencyFormatter.format(
+                                    payments.filter(p => {
+                                        const paymentDate = new Date(p.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return paymentDate >= start && paymentDate <= end;
+                                    }).reduce((sum, p) => sum + p.amount, 0)
+                                )],
+                                [t('dashboard.totalEarnings'), currencyFormatter.format(
+                                    payments.filter(p => {
+                                        const paymentDate = new Date(p.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return paymentDate >= start && paymentDate <= end;
+                                    }).reduce((sum, p) => sum + p.doctorShare, 0)
+                                )],
+                                [t('reports.monthlyFinancialSummary.thisMonthExpenses'), currencyFormatter.format(
+                                    expenses.filter(e => {
+                                        const expenseDate = new Date(e.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return expenseDate >= start && expenseDate <= end;
+                                    }).reduce((sum, e) => sum + e.amount, 0)
+                                )],
+                                [t('reports.monthlyFinancialSummary.clinicProfitThisMonth'), currencyFormatter.format(
+                                    payments.filter(p => {
+                                        const paymentDate = new Date(p.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return paymentDate >= start && paymentDate <= end;
+                                    }).reduce((sum, p) => sum + p.amount, 0) -
+                                    expenses.filter(e => {
+                                        const expenseDate = new Date(e.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return expenseDate >= start && expenseDate <= end;
+                                    }).reduce((sum, e) => sum + e.amount, 0) -
+                                    payments.filter(p => {
+                                        const paymentDate = new Date(p.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return paymentDate >= start && paymentDate <= end;
+                                    }).reduce((sum, p) => sum + p.doctorShare, 0)
+                                )]
+                            ]}
+                        />
+
+                        <PrintTable
+                            title={t('reports.monthlyFinancialSummary.monthlyPayments')}
+                            headers={[t('common.patient'), t('payment.amount'), t('common.date')]}
+                            data={payments.filter(p => {
+                                const paymentDate = new Date(p.date);
+                                const start = new Date(startDate);
+                                const end = new Date(endDate);
+                                return paymentDate >= start && paymentDate <= end;
+                            }).slice(0, 20).map(payment => {
+                                const patient = patients.find(p => p.id === payment.patientId);
+                                return [
+                                    patient?.name || t('common.unknown'),
+                                    currencyFormatter.format(payment.amount),
+                                    dateFormatter.format(new Date(payment.date))
+                                ];
+                            })}
+                        />
+
+                        <PrintTable
+                            title={t('reports.monthlyFinancialSummary.monthlyExpenses')}
+                            headers={[t('expense.description'), t('expense.amount'), t('expense.category')]}
+                            data={expenses.filter(e => {
+                                const expenseDate = new Date(e.date);
+                                const start = new Date(startDate);
+                                const end = new Date(endDate);
+                                return expenseDate >= start && expenseDate <= end;
+                            }).slice(0, 20).map(expense => [
+                                expense.description,
+                                currencyFormatter.format(expense.amount),
+                                t(`expenseCategory.${expense.category}`)
+                            ])}
+                        />
+                    </div>
+                )}
+
+                {activeTab === 'quarterlyAnnualOverview' && (
+                    <div className="print-section space-y-6">
+                        <h3 className="text-xl font-bold text-slate-800">{t('reports.quarterlyAnnualOverview.title')} - {startDate.split('-')[0]}</h3>
+
+                        <PrintTable
+                            title={t('reports.quarterlyAnnualOverview.kpiCards')}
+                            headers={[t('common.metric'), t('common.value')]}
+                            data={[
+                                [t('reports.quarterlyAnnualOverview.totalRevenue'), currencyFormatter.format(
+                                    payments.filter(p => {
+                                        const paymentDate = new Date(p.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return paymentDate >= start && paymentDate <= end;
+                                    }).reduce((sum, p) => sum + p.amount, 0)
+                                )],
+                                [t('dashboard.totalEarnings'), currencyFormatter.format(
+                                    payments.filter(p => {
+                                        const paymentDate = new Date(p.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return paymentDate >= start && paymentDate <= end;
+                                    }).reduce((sum, p) => sum + p.doctorShare, 0)
+                                )],
+                                [t('reports.quarterlyAnnualOverview.totalExpenses'), currencyFormatter.format(
+                                    expenses.filter(e => {
+                                        const expenseDate = new Date(e.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return expenseDate >= start && expenseDate <= end;
+                                    }).reduce((sum, e) => sum + e.amount, 0)
+                                )],
+                                [t('reports.quarterlyAnnualOverview.cumulativeProfit'), currencyFormatter.format(
+                                    payments.filter(p => {
+                                        const paymentDate = new Date(p.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return paymentDate >= start && paymentDate <= end;
+                                    }).reduce((sum, p) => sum + p.amount, 0) -
+                                    expenses.filter(e => {
+                                        const expenseDate = new Date(e.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return expenseDate >= start && expenseDate <= end;
+                                    }).reduce((sum, e) => sum + e.amount, 0) -
+                                    payments.filter(p => {
+                                        const paymentDate = new Date(p.date);
+                                        const start = new Date(startDate);
+                                        const end = new Date(endDate);
+                                        return paymentDate >= start && paymentDate <= end;
+                                    }).reduce((sum, p) => sum + p.doctorShare, 0)
+                                )]
+                            ]}
+                        />
+
+                        <PrintTable
+                            title={t('reports.quarterlyAnnualOverview.periodPayments')}
+                            headers={[t('common.patient'), t('payment.amount'), t('common.date')]}
+                            data={payments.filter(p => {
+                                const paymentDate = new Date(p.date);
+                                const start = new Date(startDate);
+                                const end = new Date(endDate);
+                                return paymentDate >= start && paymentDate <= end;
+                            }).slice(0, 20).map(payment => {
+                                const patient = patients.find(p => p.id === payment.patientId);
+                                return [
+                                    patient?.name || t('common.unknown'),
+                                    currencyFormatter.format(payment.amount),
+                                    dateFormatter.format(new Date(payment.date))
+                                ];
+                            })}
+                        />
+
+                        <PrintTable
+                            title={t('reports.quarterlyAnnualOverview.periodExpenses')}
+                            headers={[t('expense.description'), t('expense.amount'), t('expense.category')]}
+                            data={expenses.filter(e => {
+                                const expenseDate = new Date(e.date);
+                                const start = new Date(startDate);
+                                const end = new Date(endDate);
+                                return expenseDate >= start && expenseDate <= end;
+                            }).slice(0, 20).map(expense => [
+                                expense.description,
+                                currencyFormatter.format(expense.amount),
+                                t(`expenseCategory.${expense.category}`)
+                            ])}
+                        />
+                    </div>
+                )}
             </main>
         </div>
+        </>
     );
 };
 

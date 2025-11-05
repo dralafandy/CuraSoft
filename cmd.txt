@@ -1,0 +1,10 @@
+
+
+npm run
+npx vite
+npm install
+npx vite --host
+
+
+npm run electron:dev
+npm run electron:build:win

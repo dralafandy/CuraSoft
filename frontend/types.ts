@@ -33,6 +33,7 @@ export interface Patient {
   emergencyContactName: string;
   emergencyContactPhone: string;
   dentalChart: DentalChartData;
+  images: string[]; // Array of base64 data URLs for attached images
 }
 
 export interface Dentist {
@@ -60,6 +61,9 @@ export interface Appointment {
   status: AppointmentStatus;
   reminderTime: 'none' | '1_hour_before' | '2_hours_before' | '1_day_before'; // New field for reminders
   reminderSent: boolean; // New field to track if reminder was sent
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // --- New Interfaces for Finance & Inventory ---
@@ -115,16 +119,17 @@ export interface TreatmentDefinition { // Renamed from TreatmentCost to be more 
 }
 
 export interface TreatmentRecord { // A specific treatment performed on a patient
-  id: string;
-  patientId: string;
-  dentistId: string;
-  treatmentDate: string; // YYYY-MM-DD
-  treatmentDefinitionId: string; // Link to TreatmentDefinition
-  notes: string;
-  inventoryItemsUsed: { inventoryItemId: string; quantity: number; cost: number; }[]; // Materials consumed, updated name
-  totalTreatmentCost: number; // Sum of basePrice and material costs
-  doctorShare: number;
-  clinicShare: number;
+   id: string;
+   patientId: string;
+   dentistId: string;
+   treatmentDate: string; // YYYY-MM-DD
+   treatmentDefinitionId: string; // Link to TreatmentDefinition
+   notes: string;
+   inventoryItemsUsed: { inventoryItemId: string; quantity: number; cost: number; }[]; // Materials consumed, updated name
+   totalTreatmentCost: number; // Sum of basePrice and material costs
+   doctorShare: number;
+   clinicShare: number;
+   affectedTeeth: string[]; // Array of tooth IDs affected by this treatment, e.g., ['UR1', 'UL2']
 }
 
 export type PaymentMethod = 'Cash' | 'Credit Card' | 'Bank Transfer' | 'Other' | 'Discount';
@@ -136,6 +141,9 @@ export interface Payment {
   amount: number;
   method: PaymentMethod;
   notes?: string;
+  treatmentRecordId: string;
+  clinicShare: number;
+  doctorShare: number;
 }
 
 // --- New interfaces for Lab Case Management ---
@@ -174,8 +182,38 @@ export interface Notification {
 }
 
 
+export type FilterOptions = {
+    dentistId?: string;
+    supplierId?: string;
+    labId?: string;
+};
+
 export type PatientDetailTab = 'details' | 'chart' | 'treatments' | 'financials'; // Removed 'aiSummary' tab
-export type View = 'dashboard' | 'patients' | 'scheduler' | 'doctors' | 'suppliers' | 'inventory' | 'labCases' | 'expenses' | 'treatmentDefinitions' | 'reports' | 'settings'; // Replaced 'finance' with specific pages and added 'settings'
+export type DoctorDetailTab = 'details' | 'treatments' | 'financials';
+export type View = 'dashboard' | 'patients' | 'scheduler' | 'doctors' | 'suppliers' | 'inventory' | 'labCases' | 'expenses' | 'treatmentDefinitions' | 'reports' | 'settings' | 'userManagement' | 'accountSelection'; // Removed 'financialAccounts', 'accountDetails', 'patientReports', 'doctorReports', 'supplierReports'
+
+export enum UserRole {
+  ADMIN = 'ADMIN',
+  DOCTOR = 'DOCTOR',
+  ASSISTANT = 'ASSISTANT',
+  RECEPTIONIST = 'RECEPTIONIST',
+}
+
+export interface UserProfile {
+  id: string;
+  user_id: string; // Supabase auth user id
+  username: string;
+  role: UserRole;
+  permissions: string[]; // Array of permission strings
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Permission {
+  id: string;
+  name: string; // e.g., 'view_patients', 'edit_treatments'
+  description: string;
+}
 
 // --- New interfaces for Supplier Financials ---
 export enum SupplierInvoiceStatus {
@@ -194,4 +232,13 @@ export interface SupplierInvoice {
     items: { description: string; amount: number; }[];
     invoiceImageUrl?: string; // Base64 Data URL
     payments: { expenseId: string; amount: number; date: string; }[];
+}
+
+// --- New interface for Doctor Payments ---
+export interface DoctorPayment {
+    id: string;
+    dentistId: string;
+    amount: number;
+    date: string; // YYYY-MM-DD
+    notes?: string;
 }

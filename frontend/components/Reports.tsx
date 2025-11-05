@@ -1,377 +1,788 @@
 import React, { useState, useMemo } from 'react';
 import { ClinicData } from '../hooks/useClinicData';
 import { useI18n } from '../hooks/useI18n';
+import { View } from '../types';
 import { openPrintWindow } from '../utils/print';
+import DailyFinancialSummary from './reports/DailyFinancialSummary';
+import MonthlyFinancialSummary from './reports/MonthlyFinancialSummary';
+import QuarterlyAnnualOverview from './reports/QuarterlyAnnualOverview';
 import PrintableReport from './reports/PrintableReport';
-import BarChart from './reports/BarChart';
-import { AppointmentStatus } from '../types';
 
-type ReportTab = 'patientStats' | 'financialSummary' | 'appointmentOverview' | 'inventoryReport' | 'treatmentPerformance';
+interface ReportsProps {
+  clinicData: ClinicData;
+  setCurrentView: (view: View) => void;
+}
 
-const PrintIcon = () => (<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 me-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m0 0v1a2 2 0 002 2h6a2 2 0 002-2v-1M8 12h8m-8 4h.01M5 12h.01M19 12h.01M5 16h.01M19 16h.01" /></svg>);
+type ReportTab = 'overview' | 'patients' | 'doctors' | 'suppliers' | 'daily' | 'monthly' | 'quarterly';
 
-const StatCard: React.FC<{ title: string; value: string | number; }> = ({ title, value }) => (
-    <div className="bg-white p-4 rounded-lg shadow-sm">
-        <p className="text-sm text-slate-500">{title}</p>
-        <p className="text-2xl font-bold text-slate-700">{value}</p>
-    </div>
-);
+const Reports: React.FC<ReportsProps> = ({ clinicData, setCurrentView }) => {
+  const { t, locale } = useI18n();
+  const [activeTab, setActiveTab] = useState<ReportTab>('overview');
 
-const Reports: React.FC<{ clinicData: ClinicData }> = ({ clinicData }) => {
-    const { t, locale } = useI18n();
-    const { appointments, expenses, treatmentRecords, treatmentDefinitions, patients, dentists } = clinicData;
-
-    const [activeTab, setActiveTab] = useState<ReportTab>('financialSummary');
-    
-    const today = new Date();
-    const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-    const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-    
-    const [startDate, setStartDate] = useState(firstDayOfMonth);
-    const [endDate, setEndDate] = useState(lastDayOfMonth);
-    
+  // Pre-compute all data to avoid conditional hooks
+  const patientSummaries = useMemo(() => {
+    const { patients, treatmentRecords, payments } = clinicData;
     const currencyFormatter = new Intl.NumberFormat(locale, { style: 'currency', currency: 'EGP' });
 
-    // Memoized data filtering
-    const filteredData = useMemo(() => {
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
+    return patients.map(patient => {
+      const patientTreatments = treatmentRecords.filter(tr => tr.patientId === patient.id);
+      const patientPayments = payments.filter(p => p.patientId === patient.id);
 
-        const filterByDate = <T extends { date?: string; startTime?: Date; treatmentDate?: string }>(items: T[], dateField: keyof T): T[] => {
-            if (!startDate || !endDate) return items;
-            return items.filter(item => {
-                const itemDateValue = item[dateField];
-                if (!itemDateValue) return false;
-                const itemDate = new Date(itemDateValue as string | Date);
-                return !isNaN(itemDate.getTime()) && itemDate >= start && itemDate <= end;
-            });
-        };
+      const totalRevenue = patientTreatments.reduce((sum, tr) => sum + tr.totalTreatmentCost, 0);
+      const totalPaid = patientPayments.reduce((sum, p) => sum + p.amount, 0);
+      const outstandingBalance = totalRevenue - totalPaid;
+      const treatmentCount = patientTreatments.length;
 
-        const filteredAppointments = filterByDate(appointments, 'startTime');
-        const filteredTreatmentRecords = filterByDate(treatmentRecords, 'treatmentDate');
-        const filteredExpenses = filterByDate(expenses, 'date');
-        
-        return { filteredAppointments, filteredTreatmentRecords, filteredExpenses };
-    }, [startDate, endDate, appointments, treatmentRecords, expenses]);
+      return {
+        patient,
+        totalRevenue,
+        totalPaid,
+        outstandingBalance,
+        treatmentCount,
+        currencyFormatter
+      };
+    });
+  }, [clinicData, locale]);
 
-    // Financial Summary Data
-    const financialSummaryData = useMemo(() => {
-        const { filteredTreatmentRecords, filteredExpenses } = filteredData;
-        const totalIncome = filteredTreatmentRecords.reduce((sum, rec) => sum + rec.totalTreatmentCost, 0);
-        const totalExpenses = filteredExpenses.reduce((sum, exp) => sum + exp.amount, 0);
-        const netProfit = totalIncome - totalExpenses;
-        
-        const expensesByCategory = filteredExpenses.reduce((acc, exp) => {
-            const categoryName = t(`expenseCategory.${exp.category}`);
-            acc[categoryName] = (acc[categoryName] || 0) + exp.amount;
-            return acc;
-        }, {} as Record<string, number>);
+  const doctorSummaries = useMemo(() => {
+    const { dentists, treatmentRecords, doctorPayments } = clinicData;
+    const currencyFormatter = new Intl.NumberFormat(locale, { style: 'currency', currency: 'EGP' });
 
-        return {
-            totalIncome,
-            totalExpenses,
-            netProfit,
-            expensesByCategoryChartData: Object.entries(expensesByCategory).map(([label, value]) => ({ label, value })),
-        };
-    }, [filteredData, t]);
+    return dentists.map(doctor => {
+      const doctorTreatments = treatmentRecords.filter(tr => tr.dentistId === doctor.id);
+      const doctorPaymentsList = doctorPayments.filter(p => p.dentistId === doctor.id);
 
-    // Treatment Performance Data
-    const treatmentPerformanceData = useMemo(() => {
-        const { filteredTreatmentRecords } = filteredData;
+      const totalRevenue = doctorTreatments.reduce((sum, tr) => sum + tr.totalTreatmentCost, 0);
+      const totalEarnings = doctorTreatments.reduce((sum, tr) => sum + tr.doctorShare, 0);
+      const totalPaymentsReceived = doctorPaymentsList.reduce((sum, p) => sum + p.amount, 0);
+      const netBalance = totalEarnings - totalPaymentsReceived;
+      const treatmentCount = doctorTreatments.length;
 
-        if (filteredTreatmentRecords.length === 0) {
-            return {
-                totalTreatments: 0,
-                totalRevenue: 0,
-                mostProfitableTreatment: { name: t('common.na'), revenue: 0 },
-                revenueByTreatmentChartData: [],
-                countByTreatmentChartData: [],
-            };
-        }
+      return {
+        doctor,
+        totalRevenue,
+        totalEarnings,
+        totalPaymentsReceived,
+        netBalance,
+        treatmentCount,
+        currencyFormatter
+      };
+    });
+  }, [clinicData, locale]);
 
-        const treatmentStats: Record<string, { count: number; totalRevenue: number }> = {};
-        filteredTreatmentRecords.forEach(rec => {
-            const treatmentName = treatmentDefinitions.find(td => td.id === rec.treatmentDefinitionId)?.name || t('common.unknownTreatment');
-            if (!treatmentStats[treatmentName]) {
-                treatmentStats[treatmentName] = { count: 0, totalRevenue: 0 };
-            }
-            treatmentStats[treatmentName].count++;
-            treatmentStats[treatmentName].totalRevenue += rec.totalTreatmentCost;
-        });
+  const supplierSummaries = useMemo(() => {
+    const { suppliers, inventoryItems, expenses } = clinicData;
+    const currencyFormatter = new Intl.NumberFormat(locale, { style: 'currency', currency: 'EGP' });
 
-        const statsArray = Object.entries(treatmentStats).map(([name, stats]) => ({ name, ...stats }));
+    return suppliers.map(supplier => {
+      const supplierItems = inventoryItems.filter(item => item.supplierId === supplier.id);
+      const supplierExpenses = expenses.filter(exp => exp.supplierId === supplier.id);
 
-        const totalTreatments = statsArray.reduce((sum, item) => sum + item.count, 0);
-        const totalRevenue = statsArray.reduce((sum, item) => sum + item.totalRevenue, 0);
+      const totalPurchases = supplierItems.reduce((sum, item) => sum + (item.unitCost * item.currentStock), 0);
+      const totalExpenses = supplierExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+      const totalValue = totalPurchases + totalExpenses;
+      const itemCount = supplierItems.length;
+      const expenseCount = supplierExpenses.length;
 
-        const mostProfitableTreatment = [...statsArray].sort((a, b) => b.totalRevenue - a.totalRevenue)[0] || { name: t('common.na'), revenue: 0 };
-        
-        const top5ByRevenue = [...statsArray].sort((a, b) => b.totalRevenue - a.totalRevenue).slice(0, 5);
-        const top5ByCount = [...statsArray].sort((a, b) => b.count - a.count).slice(0, 5);
+      return {
+        supplier,
+        totalPurchases,
+        totalExpenses,
+        totalValue,
+        itemCount,
+        expenseCount,
+        currencyFormatter
+      };
+    });
+  }, [clinicData, locale]);
 
-        return {
-            totalTreatments,
-            totalRevenue,
-            mostProfitableTreatment,
-            revenueByTreatmentChartData: top5ByRevenue.map(item => ({ label: item.name, value: item.totalRevenue })),
-            countByTreatmentChartData: top5ByCount.map(item => ({ label: item.name, value: item.count })),
-        };
-    }, [filteredData, treatmentDefinitions, t]);
+  const tabs = [
+    { id: 'overview' as ReportTab, label: t('reports.overview'), icon: '📊' },
+    { id: 'patients' as ReportTab, label: t('reports.patientReports'), icon: '👥' },
+    { id: 'doctors' as ReportTab, label: t('reports.doctorReports'), icon: '👨‍⚕️' },
+    { id: 'suppliers' as ReportTab, label: t('reports.supplierReports'), icon: '🏢' },
+    { id: 'daily' as ReportTab, label: t('reports.dailyFinancialSummary.title'), icon: '📅' },
+    { id: 'monthly' as ReportTab, label: t('reports.monthlyFinancialSummary.title'), icon: '📆' },
+    { id: 'quarterly' as ReportTab, label: t('reports.quarterlyAnnualOverview.title'), icon: '📈' },
+  ];
 
-    // Patient Statistics Data
-    const patientStatsData = useMemo(() => {
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
+  const getTabDescription = (tabId: ReportTab) => {
+    switch (tabId) {
+      case 'overview':
+        return t('reports.overviewDescription');
+      case 'patients':
+        return 'تقارير مفصلة عن المرضى وإحصائياتهم المالية والعلاجية';
+      case 'doctors':
+        return 'تقارير أداء الأطباء وإحصائياتهم المالية والعلاجية';
+      case 'suppliers':
+        return 'تقارير الموردين وإحصائيات المشتريات والمصروفات';
+      case 'daily':
+        return 'ملخص مالي يومي مع تفاصيل الإيرادات والمصروفات';
+      case 'monthly':
+        return 'ملخص مالي شهري مع تحليل الأداء والإحصائيات';
+      case 'quarterly':
+        return 'نظرة عامة ربع سنوية وسنوية على الأداء المالي';
+      default:
+        return '';
+    }
+  };
 
-        if (!startDate || !endDate || patients.length === 0) {
-            return {
-                totalPatientsInPeriod: 0,
-                genderDistributionChartData: [],
-                ageDistributionChartData: [],
-            };
-        }
-        
-        const filteredPatients = patients.filter(p => {
-            const lastVisitDate = new Date(p.lastVisit);
-            return lastVisitDate >= start && lastVisitDate <= end;
-        });
+  const renderOverviewTab = () => {
+    const { patients, dentists, appointments, labCases, payments, expenses } = clinicData;
 
-        const genderDistribution = filteredPatients.reduce((acc, p) => {
-            const genderKey = t(p.gender.toLowerCase() as 'male' | 'female' | 'other');
-            acc[genderKey] = (acc[genderKey] || 0) + 1;
-            return acc;
-        }, {} as Record<string, number>);
+    // Financial calculations consistent with dashboard
+    const totalRevenue = payments.reduce((sum, p) => sum + p.amount, 0);
+    const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const totalDoctorShares = payments.reduce((sum, p) => sum + p.doctorShare, 0);
+    const netProfit = totalRevenue - totalDoctorShares - totalExpenses;
+    const totalCharges = clinicData.treatmentRecords.reduce((sum, tr) => sum + tr.totalTreatmentCost, 0);
+    const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
+    const outstandingBalance = totalCharges - totalPayments;
 
-        const ageDistribution: Record<string, number> = {
-            '0-18': 0, '19-35': 0, '36-55': 0, '56+': 0,
-        };
-        filteredPatients.forEach(p => {
-            const dob = new Date(p.dob);
-            if (isNaN(dob.getTime())) return;
-            const age = Math.abs(new Date(Date.now() - dob.getTime()).getUTCFullYear() - 1970);
-            if (age <= 18) ageDistribution['0-18']++;
-            else if (age <= 35) ageDistribution['19-35']++;
-            else if (age <= 55) ageDistribution['36-55']++;
-            else ageDistribution['56+']++;
-        });
+    // Today's calculations
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-        return {
-            totalPatientsInPeriod: filteredPatients.length,
-            genderDistributionChartData: Object.entries(genderDistribution).map(([label, value]) => ({ label, value })),
-            ageDistributionChartData: Object.entries(ageDistribution).map(([label, value]) => ({ label, value })),
-        };
-    }, [patients, startDate, endDate, t]);
-    
-    // Appointment Overview Data
-    const appointmentOverviewData = useMemo(() => {
-        const { filteredAppointments } = filteredData;
+    const todaysPayments = payments.filter(p => {
+      const pDate = new Date(p.date);
+      pDate.setHours(0, 0, 0, 0);
+      return pDate.getTime() === today.getTime();
+    });
 
-        const totalAppointments = filteredAppointments.length;
-        const completedAppointments = filteredAppointments.filter(apt => apt.status === AppointmentStatus.COMPLETED).length;
-        const cancelledAppointments = filteredAppointments.filter(apt => apt.status === AppointmentStatus.CANCELLED).length;
-        const completionRate = totalAppointments > 0 ? (completedAppointments / totalAppointments) * 100 : 0;
+    const todaysExpenses = expenses.filter(exp => {
+      const expDate = new Date(exp.date);
+      expDate.setHours(0, 0, 0, 0);
+      return expDate.getTime() === today.getTime();
+    });
 
-        const appointmentsByDentist = filteredAppointments.reduce((acc, apt) => {
-            const dentistName = dentists.find(d => d.id === apt.dentistId)?.name || t('common.unknownDentist');
-            acc[dentistName] = (acc[dentistName] || 0) + 1;
-            return acc;
-        }, {} as Record<string, number>);
+    const todaysRevenue = todaysPayments.reduce((sum, p) => sum + p.amount, 0);
+    const todaysDoctorShares = todaysPayments.reduce((sum, p) => sum + p.doctorShare, 0);
+    const todaysExpensesTotal = todaysExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const todaysNetProfit = todaysRevenue - todaysDoctorShares - todaysExpensesTotal;
 
-        return {
-            totalAppointments,
-            completedAppointments,
-            cancelledAppointments,
-            completionRate,
-            appointmentsByDentistChartData: Object.entries(appointmentsByDentist).map(([label, value]) => ({ label, value })),
-        };
-    }, [filteredData, dentists, t]);
-
-
-    const handlePrint = () => {
-        openPrintWindow(
-            `${t('appName')} - ${t(`reports.${activeTab}` as any)}`,
-            <PrintableReport clinicData={clinicData} activeTab={activeTab} startDate={startDate} endDate={endDate} />
-        );
-    };
-
-    const tabs: { id: ReportTab; label: string }[] = [
-        { id: 'financialSummary', label: t('reports.tabFinancialSummary') },
-        { id: 'treatmentPerformance', label: t('reports.tabTreatmentPerformance') },
-        { id: 'appointmentOverview', label: t('reports.tabAppointmentOverview') },
-        { id: 'patientStats', label: t('reports.tabPatientStatistics') },
-        { id: 'inventoryReport', label: t('reports.tabInventoryReport') },
-    ];
-    
-    const renderContent = () => {
-        switch (activeTab) {
-            case 'financialSummary':
-                return (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-1 space-y-4">
-                            <StatCard title={t('reports.financialSummary.totalIncome')} value={currencyFormatter.format(financialSummaryData.totalIncome)} />
-                            <StatCard title={t('reports.financialSummary.totalExpenses')} value={currencyFormatter.format(financialSummaryData.totalExpenses)} />
-                            <StatCard title={t('reports.financialSummary.netProfit')} value={currencyFormatter.format(financialSummaryData.netProfit)} />
-                        </div>
-                        <div className="lg:col-span-2 bg-white p-4 rounded-lg shadow-sm min-h-[300px]">
-                             <BarChart 
-                                title={t('reports.financialSummary.expensesByCategory')}
-                                data={financialSummaryData.expensesByCategoryChartData}
-                                colorClass="bg-rose-500"
-                            />
-                        </div>
-                    </div>
-                );
-            case 'treatmentPerformance':
-                if (treatmentPerformanceData.totalTreatments === 0) {
-                    return (
-                        <div className="bg-white p-6 rounded-lg shadow-sm text-center">
-                            <p className="text-slate-500">{t('reports.noDataAvailable')}</p>
-                        </div>
-                    );
-                }
-                return (
-                    <div className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <StatCard title={t('reports.treatmentPerformance.count')} value={treatmentPerformanceData.totalTreatments} />
-                            <StatCard title={t('reports.treatmentPerformance.totalRevenue')} value={currencyFormatter.format(treatmentPerformanceData.totalRevenue)} />
-                            <StatCard title={t('reports.treatmentPerformance.mostProfitable')} value={treatmentPerformanceData.mostProfitableTreatment.name} />
-                        </div>
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                             <div className="bg-white p-4 rounded-lg shadow-sm min-h-[300px]">
-                                <BarChart
-                                    title={t('reports.treatmentPerformance.top5ByRevenue')}
-                                    data={treatmentPerformanceData.revenueByTreatmentChartData}
-                                    colorClass="bg-primary"
-                                />
-                            </div>
-                            <div className="bg-white p-4 rounded-lg shadow-sm min-h-[300px]">
-                                <BarChart
-                                    title={t('reports.treatmentPerformance.top5ByFrequency')}
-                                    data={treatmentPerformanceData.countByTreatmentChartData}
-                                    colorClass="bg-secondary"
-                                />
-                            </div>
-                        </div>
-                    </div>
-                );
-            case 'patientStats':
-                if (patientStatsData.totalPatientsInPeriod === 0) {
-                    return (
-                        <div className="bg-white p-6 rounded-lg shadow-sm text-center">
-                            <p className="text-slate-500">{t('reports.noDataAvailable')}</p>
-                        </div>
-                    );
-                }
-                return (
-                    <div className="space-y-6">
-                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                             <StatCard title={t('reports.patientStats.totalPatients')} value={patientStatsData.totalPatientsInPeriod} />
-                         </div>
-                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <div className="bg-white p-4 rounded-lg shadow-sm min-h-[300px]">
-                                <BarChart
-                                    title={t('reports.patientStats.genderDistribution')}
-                                    data={patientStatsData.genderDistributionChartData}
-                                    colorClass="bg-indigo-500"
-                                />
-                            </div>
-                            <div className="bg-white p-4 rounded-lg shadow-sm min-h-[300px]">
-                                <BarChart
-                                    title={t('reports.patientStats.ageDistribution')}
-                                    data={patientStatsData.ageDistributionChartData}
-                                    colorClass="bg-teal-500"
-                                />
-                            </div>
-                        </div>
-                    </div>
-                );
-            case 'appointmentOverview':
-                if (appointmentOverviewData.totalAppointments === 0) {
-                    return (
-                        <div className="bg-white p-6 rounded-lg shadow-sm text-center">
-                            <p className="text-slate-500">{t('reports.noDataAvailable')}</p>
-                        </div>
-                    );
-                }
-                return (
-                    <div className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                            <StatCard title={t('reports.appointmentOverview.totalAppointments')} value={appointmentOverviewData.totalAppointments} />
-                            <StatCard title={t('reports.appointmentOverview.completedAppointments')} value={appointmentOverviewData.completedAppointments} />
-                            <StatCard title={t('reports.appointmentOverview.cancelledAppointments')} value={appointmentOverviewData.cancelledAppointments} />
-                            <StatCard title={t('reports.appointmentOverview.completionRate')} value={`${appointmentOverviewData.completionRate.toFixed(1)}%`} />
-                        </div>
-                        <div className="grid grid-cols-1">
-                            <div className="bg-white p-4 rounded-lg shadow-sm min-h-[300px]">
-                                <BarChart
-                                    title={t('reports.appointmentOverview.appointmentsByDentist')}
-                                    data={appointmentOverviewData.appointmentsByDentistChartData}
-                                    colorClass="bg-amber-500"
-                                />
-                            </div>
-                        </div>
-                    </div>
-                );
-            default:
-                return (
-                    <div className="bg-white p-6 rounded-lg shadow-sm text-center">
-                        <p className="text-slate-500">{t('reports.noDataAvailable')}</p>
-                        <p className="text-sm text-slate-400 mt-2">A visual summary for this report will be available in a future update. You can print the full report now.</p>
-                    </div>
-                );
-        }
-    };
+    const currencyFormatter = new Intl.NumberFormat(locale, { style: 'currency', currency: 'EGP' });
 
     return (
-        <div className="space-y-6">
-            <div className="bg-white p-4 rounded-xl shadow-md flex flex-col md:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-4 flex-wrap">
-                    <div>
-                        <label htmlFor="start-date" className="text-sm font-medium text-slate-600 me-2">{t('reports.startDate')}:</label>
-                        <input type="date" id="start-date" value={startDate} onChange={e => setStartDate(e.target.value)} className="p-2 border border-slate-300 rounded-lg focus:ring-primary focus:border-primary" />
-                    </div>
-                    <div>
-                        <label htmlFor="end-date" className="text-sm font-medium text-slate-600 me-2">{t('reports.endDate')}:</label>
-                        <input type="date" id="end-date" value={endDate} onChange={e => setEndDate(e.target.value)} className="p-2 border border-slate-300 rounded-lg focus:ring-primary focus:border-primary" />
-                    </div>
-                </div>
-                <button
-                    onClick={handlePrint}
-                    className="bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary-dark flex items-center justify-center w-full md:w-auto focus:outline-none focus:ring-2 focus:ring-primary-light"
-                >
-                    <PrintIcon /> {t('reports.printReport')}
-                </button>
+      <div className="space-y-6">
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">{t('reports.overview')}</h2>
+          <p className="text-gray-600 mb-6">{t('reports.overviewDescription')}</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+              <div className="text-2xl font-bold text-blue-600">{patients.length}</div>
+              <div className="text-sm text-blue-700">{t('common.patients')}</div>
+            </div>
+            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+              <div className="text-2xl font-bold text-green-600">{dentists.length}</div>
+              <div className="text-sm text-green-700">{t('common.doctors')}</div>
+            </div>
+            <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+              <div className="text-2xl font-bold text-purple-600">{appointments.length}</div>
+              <div className="text-sm text-purple-700">{t('appointmentScheduler.title')}</div>
+            </div>
+            <div className="bg-orange-50 p-4 rounded-lg border border-orange-200">
+              <div className="text-2xl font-bold text-orange-600">{labCases.length}</div>
+              <div className="text-sm text-orange-700">{t('labCasesManagement.title')}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">{t('reports.dailyFinancialSummary.title')}</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+              <div className="text-2xl font-bold text-blue-600">{currencyFormatter.format(todaysRevenue)}</div>
+              <div className="text-sm text-blue-700">{t('reports.dailyFinancialSummary.todaysRevenue')}</div>
             </div>
 
-            <div>
-                <div className="border-b border-slate-200 mb-4">
-                    <nav className="-mb-px flex space-x-4 rtl:space-x-reverse overflow-x-auto">
-                        {tabs.map(tab => (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id)}
-                                className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${
-                                    activeTab === tab.id
-                                        ? 'border-primary text-primary'
-                                        : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
-                                }`}
-                            >
-                                {tab.label}
-                            </button>
-                        ))}
-                    </nav>
-                </div>
-                
-                <div className="mt-4">
-                    {renderContent()}
-                </div>
+            <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+              <div className="text-2xl font-bold text-yellow-600">{currencyFormatter.format(todaysDoctorShares)}</div>
+              <div className="text-sm text-yellow-700" dir="rtl">حصة الأطباء اليوم</div>
             </div>
+
+            <div className="bg-red-50 p-4 rounded-lg border border-red-200">
+              <div className="text-2xl font-bold text-red-600">{currencyFormatter.format(todaysExpensesTotal)}</div>
+              <div className="text-sm text-red-700">{t('reports.dailyFinancialSummary.todaysExpenses')}</div>
+            </div>
+
+            <div className={`p-4 rounded-lg border ${todaysNetProfit >= 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+              <div className={`text-2xl font-bold ${todaysNetProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{currencyFormatter.format(todaysNetProfit)}</div>
+              <div className={`text-sm ${todaysNetProfit >= 0 ? 'text-green-700' : 'text-red-700'}`}>{t('reports.dailyFinancialSummary.todaysProfit')}</div>
+            </div>
+          </div>
         </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">{t('reports.financialOverview')}</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+              <div className="text-2xl font-bold text-green-600">{currencyFormatter.format(totalRevenue)}</div>
+              <div className="text-sm text-green-700">{t('reports.totalRevenue')}</div>
+            </div>
+            <div className="bg-red-50 p-4 rounded-lg border border-red-200">
+              <div className="text-2xl font-bold text-red-600">{currencyFormatter.format(totalExpenses)}</div>
+              <div className="text-sm text-red-700">{t('reports.totalExpenses')}</div>
+            </div>
+            <div className={`p-4 rounded-lg border ${netProfit >= 0 ? 'bg-blue-50 border-blue-200' : 'bg-red-50 border-red-200'}`}>
+              <div className={`text-2xl font-bold ${netProfit >= 0 ? 'text-blue-600' : 'text-red-600'}`}>{currencyFormatter.format(netProfit)}</div>
+              <div className={`text-sm ${netProfit >= 0 ? 'text-blue-700' : 'text-red-700'}`}>{t('reports.netProfit')}</div>
+            </div>
+            <div className="bg-orange-50 p-4 rounded-lg border border-orange-200">
+              <div className="text-2xl font-bold text-orange-600">{currencyFormatter.format(outstandingBalance)}</div>
+              <div className="text-sm text-orange-700">{t('reports.outstandingBalance')}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {tabs.slice(1).map(tab => (
+            <div key={tab.id} className="bg-white rounded-lg shadow p-6 hover:shadow-lg transition-shadow">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-2xl">{tab.icon}</span>
+                <h3 className="text-lg font-semibold text-gray-900">{tab.label}</h3>
+              </div>
+              <p className="text-gray-600 text-sm mb-4" dir="rtl">
+                {getTabDescription(tab.id)}
+              </p>
+              <button
+                onClick={() => setActiveTab(tab.id)}
+                className="bg-primary text-white px-4 py-2 rounded hover:bg-primary-dark transition-colors text-sm font-medium"
+              >
+                {t('common.view')}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
     );
+  };
+
+  const renderPatientsTab = () => {
+    return (
+      <div className="space-y-6">
+        <div className="bg-white rounded-xl shadow-lg p-6" dir="rtl">
+          <h2 className="text-xl font-semibold text-slate-800 mb-6">{t('reports.patientList')}</h2>
+          <div className="space-y-4">
+            {patientSummaries.map(({ patient, totalRevenue, totalPaid, outstandingBalance, treatmentCount, currencyFormatter }) => (
+              <div key={patient.id} className="border border-slate-200 rounded-xl p-4 hover:bg-slate-50 transition-colors">
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-slate-800">{patient.name}</h3>
+                    <p className="text-sm text-slate-600">{patient.phone} | {patient.email}</p>
+                    <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <span className="text-slate-500">{t('reports.totalRevenue')}:</span>
+                        <span className="font-semibold text-slate-800 ml-1">{currencyFormatter.format(totalRevenue)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">{t('reports.totalPaid')}:</span>
+                        <span className="font-semibold text-green-600 ml-1">{currencyFormatter.format(totalPaid)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">{t('reports.outstandingBalance')}:</span>
+                        <span className={`font-semibold ml-1 ${outstandingBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {currencyFormatter.format(outstandingBalance)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">{t('reports.treatmentCount')}:</span>
+                        <span className="font-semibold text-slate-800 ml-1">{treatmentCount}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const { treatmentRecords, payments } = clinicData;
+                      const patientTreatments = treatmentRecords.filter(tr => tr.patientId === patient.id);
+                      const patientPayments = payments.filter(p => p.patientId === patient.id);
+                      const totalRevenue = patientTreatments.reduce((sum, tr) => sum + tr.totalTreatmentCost, 0);
+                      const totalPaid = patientPayments.reduce((sum, p) => sum + p.amount, 0);
+
+                      const printContent = (
+                        <div className="p-8 bg-white text-slate-900" dir="rtl">
+                          <header className="text-center mb-10 border-b-2 border-slate-300 pb-6">
+                            <h1 className="text-4xl font-bold text-slate-800 mb-2">{t('patientReport.title')}</h1>
+                            <h2 className="text-2xl font-bold text-primary-dark mb-4">{patient.name}</h2>
+                            <div className="text-sm text-slate-600">
+                              <p>الهاتف: {patient.phone}</p>
+                              <p>البريد الإلكتروني: {patient.email}</p>
+                              <p>تاريخ الميلاد: {patient.dob ? new Date(patient.dob).toLocaleDateString('ar-EG') : 'غير محدد'}</p>
+                            </div>
+                          </header>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">{t('patientReport.summary')}</h3>
+                            <div className="grid grid-cols-2 gap-6 mb-6">
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">{t('patientReport.totalRevenue')}</p>
+                                <p className="text-2xl font-bold text-slate-800">{currencyFormatter.format(totalRevenue)}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">{t('patientReport.totalPaid')}</p>
+                                <p className="text-2xl font-bold text-green-600">{currencyFormatter.format(totalPaid)}</p>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">الرصيد المستحق</p>
+                                <p className={`text-xl font-bold ${outstandingBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>{currencyFormatter.format(outstandingBalance)}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">عدد العلاجات</p>
+                                <p className="text-xl font-bold text-blue-600">{treatmentCount}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">عدد المدفوعات</p>
+                                <p className="text-xl font-bold text-purple-600">{patientPayments.length}</p>
+                              </div>
+                            </div>
+                          </section>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">تفاصيل العلاجات</h3>
+                            <table className="w-full border-collapse border border-slate-300">
+                              <thead>
+                                <tr className="bg-slate-100">
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">التاريخ</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">العلاج</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">الطبيب</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">التكلفة</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">ملاحظات</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {patientTreatments.map(treatment => {
+                                  const doctor = clinicData.dentists.find(d => d.id === treatment.dentistId);
+                                  return (
+                                    <tr key={treatment.id}>
+                                      <td className="border border-slate-300 p-3 text-sm">{new Date(treatment.treatmentDate).toLocaleDateString('ar-EG')}</td>
+                                      <td className="border border-slate-300 p-3 text-sm">{treatment.treatmentName}</td>
+                                      <td className="border border-slate-300 p-3 text-sm">{doctor?.name || 'غير محدد'}</td>
+                                      <td className="border border-slate-300 p-3 text-sm font-semibold">{currencyFormatter.format(treatment.totalTreatmentCost)}</td>
+                                      <td className="border border-slate-300 p-3 text-sm">{treatment.notes || '-'}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </section>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">تفاصيل المدفوعات</h3>
+                            <table className="w-full border-collapse border border-slate-300">
+                              <thead>
+                                <tr className="bg-slate-100">
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">التاريخ</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">المبلغ</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">طريقة الدفع</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">ملاحظات</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {patientPayments.map(payment => (
+                                  <tr key={payment.id}>
+                                    <td className="border border-slate-300 p-3 text-sm">{new Date(payment.date).toLocaleDateString('ar-EG')}</td>
+                                    <td className="border border-slate-300 p-3 text-sm font-semibold text-green-600">{currencyFormatter.format(payment.amount)}</td>
+                                    <td className="border border-slate-300 p-3 text-sm">{payment.method}</td>
+                                    <td className="border border-slate-300 p-3 text-sm">{payment.notes || '-'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </section>
+
+                          <footer className="text-center text-sm text-slate-500 border-t border-slate-300 pt-6">
+                            <p>تم إنشاء هذا التقرير في {new Date().toLocaleDateString('ar-EG')} الساعة {new Date().toLocaleTimeString('ar-EG')}</p>
+                            <p className="mt-2">عيادة كيوراسوف - نظام إدارة العيادات الطبية</p>
+                          </footer>
+                        </div>
+                      );
+                      openPrintWindow(`${t('patientReport.title')} - ${patient.name}`, printContent);
+                    }}
+                    className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+                  >
+                    🖨️ {t('reports.printReport')}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDoctorsTab = () => {
+    return (
+      <div className="space-y-6">
+        <div className="bg-white rounded-xl shadow-lg p-6" dir="rtl">
+          <h2 className="text-xl font-semibold text-slate-800 mb-6">{t('reports.doctorList')}</h2>
+          <div className="space-y-4">
+            {doctorSummaries.map(({ doctor, totalRevenue, totalEarnings, totalPaymentsReceived, netBalance, treatmentCount, currencyFormatter }) => (
+              <div key={doctor.id} className="border border-slate-200 rounded-xl p-4 hover:bg-slate-50 transition-colors">
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                  <div className="flex items-center gap-4 flex-1">
+                    <span className={`w-4 h-4 rounded-full ${doctor.color}`}></span>
+                    <div className="flex-1">
+                      <h3 className="text-lg font-semibold text-slate-800">{doctor.name}</h3>
+                      <p className="text-sm text-slate-600">{doctor.specialty}</p>
+                      <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                        <div>
+                          <span className="text-slate-500">{t('reports.totalRevenue')}:</span>
+                          <span className="font-semibold text-slate-800 ml-1">{currencyFormatter.format(totalRevenue)}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500">{t('reports.totalEarnings')}:</span>
+                          <span className="font-semibold text-green-600 ml-1">{currencyFormatter.format(totalEarnings)}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500">{t('reports.totalPaymentsReceived')}:</span>
+                          <span className="font-semibold text-blue-600 ml-1">{currencyFormatter.format(totalPaymentsReceived)}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500">{t('reports.netBalance')}:</span>
+                          <span className={`font-semibold ml-1 ${netBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {currencyFormatter.format(netBalance)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {t('reports.treatmentCount')}: {treatmentCount}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const { treatmentRecords, doctorPayments } = clinicData;
+                      const doctorTreatments = treatmentRecords.filter(tr => tr.dentistId === doctor.id);
+                      const doctorPaymentsList = doctorPayments.filter(p => p.dentistId === doctor.id);
+                      const totalEarnings = doctorTreatments.reduce((sum, tr) => sum + tr.doctorShare, 0);
+                      const totalPaymentsReceived = doctorPaymentsList.reduce((sum, p) => sum + p.amount, 0);
+
+                      const printContent = (
+                        <div className="p-8 bg-white text-slate-900" dir="rtl">
+                          <header className="text-center mb-10 border-b-2 border-slate-300 pb-6">
+                            <h1 className="text-4xl font-bold text-slate-800 mb-2">{t('doctorReport.title')}</h1>
+                            <h2 className="text-2xl font-bold text-primary-dark mb-4">{doctor.name}</h2>
+                            <div className="text-sm text-slate-600">
+                              <p>التخصص: {doctor.specialty}</p>
+                            </div>
+                          </header>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">{t('doctorReport.summary')}</h3>
+                            <div className="grid grid-cols-2 gap-6 mb-6">
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">{t('doctorReport.totalEarnings')}</p>
+                                <p className="text-2xl font-bold text-green-600">{currencyFormatter.format(totalEarnings)}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">{t('doctorReport.totalPaymentsReceived')}</p>
+                                <p className="text-2xl font-bold text-blue-600">{currencyFormatter.format(totalPaymentsReceived)}</p>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">الرصيد الصافي</p>
+                                <p className={`text-xl font-bold ${netBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>{currencyFormatter.format(netBalance)}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">عدد العلاجات</p>
+                                <p className="text-xl font-bold text-blue-600">{treatmentCount}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">عدد المدفوعات المستلمة</p>
+                                <p className="text-xl font-bold text-purple-600">{doctorPaymentsList.length}</p>
+                              </div>
+                            </div>
+                          </section>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">تفاصيل العلاجات</h3>
+                            <table className="w-full border-collapse border border-slate-300">
+                              <thead>
+                                <tr className="bg-slate-100">
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">التاريخ</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">المريض</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">العلاج</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">إجمالي التكلفة</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">حصة الطبيب</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">ملاحظات</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {doctorTreatments.map(treatment => {
+                                  const patient = clinicData.patients.find(p => p.id === treatment.patientId);
+                                  return (
+                                    <tr key={treatment.id}>
+                                      <td className="border border-slate-300 p-3 text-sm">{new Date(treatment.treatmentDate).toLocaleDateString('ar-EG')}</td>
+                                      <td className="border border-slate-300 p-3 text-sm">{patient?.name || 'غير محدد'}</td>
+                                      <td className="border border-slate-300 p-3 text-sm">{treatment.treatmentName}</td>
+                                      <td className="border border-slate-300 p-3 text-sm font-semibold">{currencyFormatter.format(treatment.totalTreatmentCost)}</td>
+                                      <td className="border border-slate-300 p-3 text-sm font-semibold text-green-600">{currencyFormatter.format(treatment.doctorShare)}</td>
+                                      <td className="border border-slate-300 p-3 text-sm">{treatment.notes || '-'}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </section>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">تفاصيل المدفوعات المستلمة</h3>
+                            <table className="w-full border-collapse border border-slate-300">
+                              <thead>
+                                <tr className="bg-slate-100">
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">التاريخ</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">المبلغ</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">ملاحظات</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {doctorPaymentsList.map(payment => (
+                                  <tr key={payment.id}>
+                                    <td className="border border-slate-300 p-3 text-sm">{new Date(payment.date).toLocaleDateString('ar-EG')}</td>
+                                    <td className="border border-slate-300 p-3 text-sm font-semibold text-green-600">{currencyFormatter.format(payment.amount)}</td>
+                                    <td className="border border-slate-300 p-3 text-sm">{payment.notes || '-'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </section>
+
+                          <footer className="text-center text-sm text-slate-500 border-t border-slate-300 pt-6">
+                            <p>تم إنشاء هذا التقرير في {new Date().toLocaleDateString('ar-EG')} الساعة {new Date().toLocaleTimeString('ar-EG')}</p>
+                            <p className="mt-2">عيادة كيوراسوف - نظام إدارة العيادات الطبية</p>
+                          </footer>
+                        </div>
+                      );
+                      openPrintWindow(`${t('doctorReport.title')} - ${doctor.name}`, printContent);
+                    }}
+                    className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+                  >
+                    🖨️ {t('reports.printReport')}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSuppliersTab = () => {
+    return (
+      <div className="space-y-6">
+        <div className="bg-white rounded-xl shadow-lg p-6" dir="rtl">
+          <h2 className="text-xl font-semibold text-slate-800 mb-6">{t('reports.supplierList')}</h2>
+          <div className="space-y-4">
+            {supplierSummaries.map(({ supplier, totalPurchases, totalExpenses, totalValue, itemCount, expenseCount, currencyFormatter }) => (
+              <div key={supplier.id} className="border border-slate-200 rounded-xl p-4 hover:bg-slate-50 transition-colors">
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-slate-800">{supplier.name}</h3>
+                    <p className="text-sm text-slate-600">{supplier.contactPerson} | {supplier.phone}</p>
+                    <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <span className="text-slate-500">{t('reports.totalPurchases')}:</span>
+                        <span className="font-semibold text-slate-800 ml-1">{currencyFormatter.format(totalPurchases)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">{t('reports.totalExpenses')}:</span>
+                        <span className="font-semibold text-red-600 ml-1">{currencyFormatter.format(totalExpenses)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">{t('reports.totalValue')}:</span>
+                        <span className="font-semibold text-blue-600 ml-1">{currencyFormatter.format(totalValue)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">{t('reports.itemCount')}:</span>
+                        <span className="font-semibold text-slate-800 ml-1">{itemCount}</span>
+                      </div>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {t('reports.expenseCount')}: {expenseCount}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const { inventoryItems, expenses } = clinicData;
+                      const supplierItems = inventoryItems.filter(item => item.supplierId === supplier.id);
+                      const supplierExpenses = expenses.filter(exp => exp.supplierId === supplier.id);
+                      const totalPurchases = supplierItems.reduce((sum, item) => sum + (item.unitCost * item.currentStock), 0);
+                      const totalExpenses = supplierExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+
+                      const printContent = (
+                        <div className="p-8 bg-white text-slate-900" dir="rtl">
+                          <header className="text-center mb-10 border-b-2 border-slate-300 pb-6">
+                            <h1 className="text-4xl font-bold text-slate-800 mb-2">{t('supplierReport.title')}</h1>
+                            <h2 className="text-2xl font-bold text-primary-dark mb-4">{supplier.name}</h2>
+                            <div className="text-sm text-slate-600">
+                              <p>الشخص المسؤول: {supplier.contactPerson}</p>
+                              <p>الهاتف: {supplier.phone}</p>
+                              <p>البريد الإلكتروني: {supplier.email}</p>
+                              <p>نوع المورد: {supplier.supplierType === 'materialSupplier' ? 'مورد مواد' : 'معمل أسنان'}</p>
+                            </div>
+                          </header>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">{t('supplierReport.summary')}</h3>
+                            <div className="grid grid-cols-2 gap-6 mb-6">
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">{t('supplierReport.totalPurchases')}</p>
+                                <p className="text-2xl font-bold text-slate-800">{currencyFormatter.format(totalPurchases)}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">{t('supplierReport.totalExpenses')}</p>
+                                <p className="text-2xl font-bold text-red-600">{currencyFormatter.format(totalExpenses)}</p>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">القيمة الإجمالية</p>
+                                <p className="text-xl font-bold text-blue-600">{currencyFormatter.format(totalValue)}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">عدد العناصر</p>
+                                <p className="text-xl font-bold text-green-600">{itemCount}</p>
+                              </div>
+                              <div className="bg-slate-50 p-4 rounded-lg border">
+                                <p className="text-sm text-slate-600">عدد المصروفات</p>
+                                <p className="text-xl font-bold text-purple-600">{expenseCount}</p>
+                              </div>
+                            </div>
+                          </section>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">قائمة العناصر المخزنة</h3>
+                            <table className="w-full border-collapse border border-slate-300">
+                              <thead>
+                                <tr className="bg-slate-100">
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">اسم العنصر</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">المخزون الحالي</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">تكلفة الوحدة</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">إجمالي القيمة</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">تاريخ الانتهاء</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {supplierItems.map(item => (
+                                  <tr key={item.id}>
+                                    <td className="border border-slate-300 p-3 text-sm">{item.name}</td>
+                                    <td className="border border-slate-300 p-3 text-sm text-center">{item.currentStock}</td>
+                                    <td className="border border-slate-300 p-3 text-sm font-semibold">{currencyFormatter.format(item.unitCost)}</td>
+                                    <td className="border border-slate-300 p-3 text-sm font-semibold text-blue-600">{currencyFormatter.format(item.unitCost * item.currentStock)}</td>
+                                    <td className="border border-slate-300 p-3 text-sm">{item.expiryDate ? new Date(item.expiryDate).toLocaleDateString('ar-EG') : '-'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </section>
+
+                          <section className="mb-10">
+                            <h3 className="text-xl font-bold text-slate-800 mb-6 border-b border-slate-200 pb-2">تفاصيل المصروفات</h3>
+                            <table className="w-full border-collapse border border-slate-300">
+                              <thead>
+                                <tr className="bg-slate-100">
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">التاريخ</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">الوصف</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">المبلغ</th>
+                                  <th className="border border-slate-300 p-3 text-right text-sm font-bold">الفئة</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {supplierExpenses.map(expense => (
+                                  <tr key={expense.id}>
+                                    <td className="border border-slate-300 p-3 text-sm">{new Date(expense.date).toLocaleDateString('ar-EG')}</td>
+                                    <td className="border border-slate-300 p-3 text-sm">{expense.description}</td>
+                                    <td className="border border-slate-300 p-3 text-sm font-semibold text-red-600">{currencyFormatter.format(expense.amount)}</td>
+                                    <td className="border border-slate-300 p-3 text-sm">{t(`expenseCategory.${expense.category}`)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </section>
+
+                          <footer className="text-center text-sm text-slate-500 border-t border-slate-300 pt-6">
+                            <p>تم إنشاء هذا التقرير في {new Date().toLocaleDateString('ar-EG')} الساعة {new Date().toLocaleTimeString('ar-EG')}</p>
+                            <p className="mt-2">عيادة كيوراسوف - نظام إدارة العيادات الطبية</p>
+                          </footer>
+                        </div>
+                      );
+                      openPrintWindow(`${t('supplierReport.title')} - ${supplier.name}`, printContent);
+                    }}
+                    className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+                  >
+                    🖨️ {t('reports.printReport')}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'overview':
+        return renderOverviewTab();
+      case 'patients':
+        return renderPatientsTab();
+      case 'doctors':
+        return renderDoctorsTab();
+      case 'suppliers':
+        return renderSuppliersTab();
+      case 'daily':
+        return <DailyFinancialSummary clinicData={clinicData} />;
+      case 'monthly':
+        return <MonthlyFinancialSummary clinicData={clinicData} />;
+      case 'quarterly':
+        return <QuarterlyAnnualOverview clinicData={clinicData} />;
+      default:
+        return renderOverviewTab();
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="bg-white rounded-lg shadow p-6" dir="rtl">
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('reports.title')}</h1>
+        <p className="text-gray-600">{t('reports.description')}</p>
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="border-b border-gray-200">
+          <nav className="flex space-x-8 px-6" aria-label="Tabs">
+            {tabs.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 ${
+                  activeTab === tab.id
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <span>{tab.icon}</span>
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        {/* Tab Content */}
+        <div className="p-6">
+          {renderTabContent()}
+        </div>
+      </div>
+    </div>
+  );
 };
 
 export default Reports;

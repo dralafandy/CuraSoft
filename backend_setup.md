@@ -2,6 +2,44 @@
 
 Follow these steps to set up your free cloud database and authentication for the CuraSoft application. This will take about 10-15 minutes.
 
+## 🚨 IMPORTANT: If You're Getting Database Errors
+
+**If you see errors like "relation 'patients' already exists" or "new row violates row-level security policy":**
+
+1. **You have already created the tables** - you don't need to run the full SQL script again
+2. **You might be missing the `user_profiles` table** - run only these SQL commands:
+
+```sql
+-- Step 1: Create the user_profiles table
+CREATE TABLE user_profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL,
+    permissions TEXT[] NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Step 2: Enable security for user_profiles (IMPORTANT: Run this!)
+ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users can manage their own user_profiles." ON public.user_profiles;
+CREATE POLICY "Users can manage their own user_profiles."
+ON public.user_profiles
+FOR ALL
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+-- Step 3: Temporarily disable RLS for initial admin creation (run this if still getting policy errors)
+ALTER TABLE public.user_profiles DISABLE ROW LEVEL SECURITY;
+```
+
+**After running these, go back to your app at http://192.168.1.17:3001/ and try creating the first admin user again.**
+
+---
+
+**If you haven't set up any tables yet, continue with the normal setup below:**
+
 ## Step 1: Create a Supabase Account and Project
 
 1.  Go to [supabase.com](https://supabase.com) and click **"Start your project"**.
@@ -61,7 +99,50 @@ This is the most important step. We will create all the tables needed for the ap
 3.  **Copy the entire block of code below** and paste it into the SQL editor.
 4.  Click the green **"RUN"** button. This will create all the tables for your clinic data.
 
+**⚠️ IMPORTANT: If you get "ERROR: 42P07: relation 'patients' already exists" or similar errors, it means you've already run the table creation script. In this case, you only need to run these two SQL commands:**
+
+**First, create the missing user_profiles table:**
 ```sql
+-- Create ONLY the User Profiles Table (if other tables already exist)
+CREATE TABLE user_profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL,
+    permissions TEXT[] NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+**Second, enable security for the user_profiles table:**
+```sql
+-- Enable RLS for user_profiles table
+ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+
+-- Create policy for user_profiles
+DROP POLICY IF EXISTS "Users can manage their own user_profiles." ON public.user_profiles;
+CREATE POLICY "Users can manage their own user_profiles."
+ON public.user_profiles
+FOR ALL
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+```
+
+**If you haven't run any SQL scripts yet, run the full script below:**
+
+```sql
+-- Create User Profiles Table (for storing user roles and permissions)
+CREATE TABLE user_profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL,
+    permissions TEXT[] NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- Create Patients Table
 CREATE TABLE patients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -82,6 +163,7 @@ CREATE TABLE patients (
     emergency_contact_name TEXT,
     emergency_contact_phone TEXT,
     dental_chart JSONB,
+    images TEXT[], -- Array of base64 data URLs for attached images
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -240,7 +322,7 @@ DO $$
 DECLARE
     table_name TEXT;
     tables_list TEXT[] := ARRAY[
-        'patients', 'dentists', 'appointments', 'suppliers', 'inventory_items',
+        'user_profiles', 'patients', 'dentists', 'appointments', 'suppliers', 'inventory_items',
         'expenses', 'treatment_definitions', 'treatment_records', 'lab_cases',
         'payments', 'supplier_invoices'
     ];
@@ -266,6 +348,34 @@ BEGIN
     END LOOP;
 END;
 $$;
+
+-- NOTE: If you're using custom authentication (not Supabase Auth), you may need to disable RLS:
+-- ALTER TABLE public.patients DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.dentists DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.appointments DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.suppliers DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.inventory_items DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.expenses DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.treatment_definitions DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.treatment_records DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.lab_cases DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.payments DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.supplier_invoices DISABLE ROW LEVEL SECURITY;
+-- ALTER TABLE public.user_profiles DISABLE ROW LEVEL SECURITY;
+
+-- And remove foreign key constraints to auth.users:
+-- ALTER TABLE patients DROP CONSTRAINT IF EXISTS patients_user_id_fkey;
+-- ALTER TABLE dentists DROP CONSTRAINT IF EXISTS dentists_user_id_fkey;
+-- ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_user_id_fkey;
+-- ALTER TABLE suppliers DROP CONSTRAINT IF EXISTS suppliers_user_id_fkey;
+-- ALTER TABLE inventory_items DROP CONSTRAINT IF EXISTS inventory_items_user_id_fkey;
+-- ALTER TABLE expenses DROP CONSTRAINT IF EXISTS expenses_user_id_fkey;
+-- ALTER TABLE treatment_definitions DROP CONSTRAINT IF EXISTS treatment_definitions_user_id_fkey;
+-- ALTER TABLE treatment_records DROP CONSTRAINT IF EXISTS treatment_records_user_id_fkey;
+-- ALTER TABLE lab_cases DROP CONSTRAINT IF EXISTS lab_cases_user_id_fkey;
+-- ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_user_id_fkey;
+-- ALTER TABLE supplier_invoices DROP CONSTRAINT IF EXISTS supplier_invoices_user_id_fkey;
+-- ALTER TABLE user_profiles DROP CONSTRAINT IF EXISTS user_profiles_user_id_fkey;
 ```
 
 ## All Done!

@@ -5,10 +5,12 @@ import Dashboard from './components/Dashboard';
 import Scheduler from './components/Scheduler';
 import DoctorList from './components/DoctorList';
 import Reports from './components/Reports';
+import UserManagement from './components/UserManagement';
 import { useClinicData, ClinicData } from './hooks/useClinicData';
 import BottomNavBar from './components/BottomNavBar';
 import { View, Appointment, LabCaseStatus } from './types';
 import { useI18n } from './hooks/useI18n';
+import { useAuth } from './contexts/AuthContext';
 
 // Import newly separated finance components
 import { SuppliersManagement } from './components/finance/SuppliersManagement';
@@ -16,6 +18,7 @@ import InventoryManagement from './components/finance/InventoryManagement';
 import LabCaseManagement from './components/finance/LabCaseManagement';
 import ExpensesManagement from './components/finance/ExpensesManagement';
 import TreatmentDefinitionManagement from './components/finance/TreatmentDefinitionManagement';
+import AccountSelectionPage from './components/finance/AccountSelectionPage';
 import Settings from './components/Settings';
 
 const BellIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 00-5-5.917V5a2 2 0 10-4 0v.083A6 6 0 004 11v3.159c0 .538-.214 1.055-.595 1.436L2 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>;
@@ -34,7 +37,12 @@ type NotificationItem = {
     data: any;
 };
 
-const NotificationBell: React.FC<{ clinicData: ClinicData, setCurrentView: (view: View) => void }> = ({ clinicData, setCurrentView }) => {
+interface NotificationBellProps {
+    clinicData: ClinicData;
+    setCurrentView: (view: View) => void;
+}
+
+const NotificationBell: React.FC<NotificationBellProps> = ({ clinicData, setCurrentView }) => {
     const { t, locale } = useI18n();
     const { patients, appointments, updateAppointment, inventoryItems, labCases } = clinicData;
     const [isOpen, setIsOpen] = useState(false);
@@ -109,6 +117,7 @@ const NotificationBell: React.FC<{ clinicData: ClinicData, setCurrentView: (view
 
     const handleSendReminder = (appointment: Appointment) => {
         const patient = patients.find(p => p.id === appointment.patientId);
+        const dentist = clinicData.dentists.find(d => d.id === appointment.dentistId);
         if (!patient) return;
 
         let phoneNumber = patient.phone.replace(/[^0-9]/g, '');
@@ -117,19 +126,22 @@ const NotificationBell: React.FC<{ clinicData: ClinicData, setCurrentView: (view
         }
         // Assuming an Egyptian country code for now
         const internationalPhoneNumber = `20${phoneNumber}`;
-        
+
         const dateFormatter = new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'long', day: 'numeric' });
         const timeFormatter = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' });
 
-        const message = t('reminders.whatsappMessage', {
-            patientName: patient.name,
-            date: dateFormatter.format(appointment.startTime),
-            time: timeFormatter.format(appointment.startTime),
-        });
+        const message = clinicData.reminderMessageTemplate
+            .replace(/\{patientName\}/g, patient.name)
+            .replace(/\{doctorName\}/g, dentist?.name || '')
+            .replace(/\{clinicName\}/g, clinicData.clinicInfo.name || 'عيادة كيوراسوف')
+            .replace(/\{appointmentDate\}/g, dateFormatter.format(appointment.startTime))
+            .replace(/\{appointmentTime\}/g, timeFormatter.format(appointment.startTime))
+            .replace(/\{clinicAddress\}/g, clinicData.clinicInfo.address || '')
+            .replace(/\{clinicPhone\}/g, clinicData.clinicInfo.phone || '');
 
         const url = `https://wa.me/${internationalPhoneNumber}?text=${encodeURIComponent(message)}`;
         window.open(url, '_blank');
-        
+
         updateAppointment({ ...appointment, reminderSent: true });
         if (notifications.length <= 1) {
             setIsOpen(false);
@@ -206,6 +218,10 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const clinicData = useClinicData();
   const { t, direction, locale } = useI18n();
+  const { isAdmin, hasPermission, loading: authLoading } = useAuth();
+
+  console.log('App rendering - auth loading:', authLoading);
+  console.log('App rendering - clinic data available:', !!clinicData);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -213,31 +229,41 @@ const App: React.FC = () => {
   }, [direction, locale]);
 
   const renderView = useCallback(() => {
+    // Permission checks based on user roles
+    const { userProfile } = useAuth();
+
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard clinicData={clinicData} setCurrentView={setCurrentView} />;
+        return userProfile?.permissions?.includes('view_dashboard') ? <Dashboard clinicData={clinicData} setCurrentView={setCurrentView} /> : <div className="text-center py-8">Access denied.</div>;
       case 'patients':
-        return <PatientList clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_patients') ? <PatientList clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
       case 'scheduler':
-        return <Scheduler clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_scheduler') ? <Scheduler clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
       case 'doctors':
-        return <DoctorList clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_patients') ? <DoctorList clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
       case 'suppliers':
-        return <SuppliersManagement clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_finance') ? <SuppliersManagement clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
       case 'inventory':
-        return <InventoryManagement clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_finance') ? <InventoryManagement clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
       case 'labCases':
-        return <LabCaseManagement clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_finance') ? <LabCaseManagement clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
       case 'expenses':
-        return <ExpensesManagement clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_finance') ? <ExpensesManagement clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
       case 'treatmentDefinitions':
-        return <TreatmentDefinitionManagement clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_finance') ? <TreatmentDefinitionManagement clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
       case 'reports':
-        return <Reports clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_reports') ? <Reports clinicData={clinicData} setCurrentView={setCurrentView} /> : <div className="text-center py-8">Access denied.</div>;
+      case 'patientReports':
+      case 'doctorReports':
+      case 'supplierReports':
+        return userProfile?.permissions?.includes('view_reports') ? <Reports clinicData={clinicData} setCurrentView={setCurrentView} /> : <div className="text-center py-8">Access denied.</div>;
+
       case 'settings':
-        return <Settings clinicData={clinicData} />;
+        return userProfile?.permissions?.includes('view_dashboard') ? <Settings clinicData={clinicData} /> : <div className="text-center py-8">Access denied.</div>;
+      case 'userManagement':
+        return isAdmin ? <UserManagement /> : <div className="text-center py-8">Access denied. Admin privileges required.</div>;
       default:
-        return <Dashboard clinicData={clinicData} setCurrentView={setCurrentView} />;
+        return userProfile?.permissions?.includes('view_dashboard') ? <Dashboard clinicData={clinicData} setCurrentView={setCurrentView} /> : <div className="text-center py-8">Access denied.</div>;
     }
   }, [currentView, clinicData, setCurrentView]);
   
@@ -253,8 +279,24 @@ const App: React.FC = () => {
       treatmentDefinitions: t('treatmentDefinitionsManagement.title'),
       reports: t('sidebar.reports'),
       settings: t('sidebar.settings'),
+      userManagement: 'User Management',
+      accountSelection: 'Account Selection',
   }
 
+  // Show loading state while auth is loading
+  if (authLoading) {
+    console.log('Showing loading state - auth still loading');
+    return (
+      <div className="bg-neutral-light text-slate-800 min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-slate-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  console.log('Rendering main app content');
   return (
     <div className="bg-neutral-light text-slate-800 min-h-screen">
       <div className="md:flex">
@@ -262,10 +304,8 @@ const App: React.FC = () => {
         <div className="flex-1 flex flex-col w-full print:block">
             <header className="bg-white shadow-sm p-4 z-10 sticky top-0 md:static print:hidden"> {/* Hide header in print */}
                 <div className="flex items-center justify-between">
-                    <div className="flex items-center">
-                        <img src="/vite.svg" alt={t('appName')} className="h-8 w-8 me-3 md:hidden"/>
-                        <h1 className="text-xl md:text-2xl font-bold text-slate-700">{viewTitles[currentView]}</h1>
-                    </div>
+                    <img src="/vite.svg" alt={t('appName')} className="h-8 w-8 me-3 md:hidden"/>
+                    <h1 className="text-xl md:text-2xl font-bold text-slate-700">{viewTitles[currentView]}</h1>
                     <NotificationBell clinicData={clinicData} setCurrentView={setCurrentView} />
                 </div>
             </header>

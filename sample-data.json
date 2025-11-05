@@ -1,0 +1,13 @@
+{
+  "patients": [],
+  "dentists": [],
+  "appointments": [],
+  "suppliers": [],
+  "inventoryItems": [],
+  "expenses": [],
+  "treatmentDefinitions": [],
+  "treatmentRecords": [],
+  "payments": [],
+  "labCases": [],
+  "supplierInvoices": []
+}
